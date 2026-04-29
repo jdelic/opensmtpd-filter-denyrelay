@@ -29,7 +29,7 @@ func (p relayPolicy) allows(recipient string) bool {
 type denyRules map[string]relayPolicy
 
 func (r denyRules) allows(userName, recipient string) bool {
-	policy, ok := r[normalizeAddress(userName)]
+	policy, ok := r.policyFor(userName)
 	if !ok {
 		return true
 	}
@@ -38,8 +38,19 @@ func (r denyRules) allows(userName, recipient string) bool {
 }
 
 func (r denyRules) hasRule(userName string) bool {
-	_, ok := r[normalizeAddress(userName)]
+	_, ok := r.policyFor(userName)
 	return ok
+}
+
+func (r denyRules) policyFor(userName string) (relayPolicy, bool) {
+	for _, key := range ruleLookupKeys(userName) {
+		policy, ok := r[key]
+		if ok {
+			return policy, true
+		}
+	}
+
+	return relayPolicy{}, false
 }
 
 type DenyRelayFilter struct {
@@ -63,30 +74,37 @@ func (f *DenyRelayFilter) RcptTo(_ opensmtpd.FilterWrapper, event opensmtpd.Filt
 		return
 	}
 
-	recipient, err := recipientFromEvent(event)
-	if err != nil {
-		debug("unable to determine rcpt-to recipient for session %s: %v", event.GetSessionId(), err)
-		event.Responder().SoftReject("Temporary failure while checking relay policy")
-		return
-	}
+	sessionID := event.GetSessionId()
+	userName := session.UserName
+	token := event.GetToken()
+	params := append([]string(nil), event.GetParams()...)
+	responder := event.Responder()
 
-	if f.rules.allows(session.UserName, recipient) {
-		event.Responder().Proceed()
-		return
-	}
+	go func() {
+		recipient, err := recipientFromParams(token, params)
+		if err != nil {
+			debug("unable to determine rcpt-to recipient for session %s: %v", sessionID, err)
+			responder.SoftReject("Temporary failure while checking relay policy")
+			return
+		}
 
-	message := fmt.Sprintf("Authenticated user %s is not permitted to relay to %s", session.UserName, recipient)
-	debug("rejecting rcpt-to for session %s: %s", event.GetSessionId(), message)
-	event.Responder().HardReject(message)
+		if f.rules.allows(userName, recipient) {
+			responder.Proceed()
+			return
+		}
+
+		message := fmt.Sprintf("Authenticated user %s is not permitted to relay to %s", userName, recipient)
+		debug("rejecting rcpt-to for session %s: %s", sessionID, message)
+		responder.HardReject(message)
+	}()
 }
 
-func recipientFromEvent(event opensmtpd.FilterEvent) (string, error) {
-	params := event.GetParams()
+func recipientFromParams(token string, params []string) (string, error) {
 	if len(params) == 0 {
 		return "", errors.New("missing rcpt-to parameters")
 	}
 
-	if len(params) > 1 && params[0] == event.GetToken() {
+	if len(params) > 1 && params[0] == token {
 		params = params[1:]
 	}
 	if len(params) == 0 {
@@ -174,6 +192,39 @@ func normalizeAddress(value string) string {
 	value = strings.TrimPrefix(value, "<")
 	value = strings.TrimSuffix(value, ">")
 	return strings.TrimSpace(value)
+}
+
+func ruleLookupKeys(userName string) []string {
+	normalized := normalizeAddress(userName)
+	if normalized == "" {
+		return nil
+	}
+
+	keys := []string{normalized}
+	localPart, domain, ok := strings.Cut(normalized, "@")
+	if !ok || localPart == "" || domain == "" {
+		return keys
+	}
+
+	addKey := func(separator string) {
+		idx := strings.Index(localPart, separator)
+		if idx <= 0 {
+			return
+		}
+
+		key := localPart[:idx] + "@" + domain
+		for _, existing := range keys {
+			if existing == key {
+				return
+			}
+		}
+		keys = append(keys, key)
+	}
+
+	addKey("+")
+	addKey("-")
+
+	return keys
 }
 
 func debug(format string, args ...interface{}) {
