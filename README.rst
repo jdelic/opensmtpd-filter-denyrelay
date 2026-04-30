@@ -12,6 +12,9 @@ Denylist format
 Pass the denylist path as the first positional argument to the executable.
 Each non-empty, non-comment line must contain either a single email address or
 an authenticated user plus an allowed recipient separated by ``=``.
+Authenticated usernames are matched case-insensitively, and denylist entries for
+``user@example.com`` also apply to ``user+suffix@example.com`` and
+``user-suffix@example.com``.
 
 ::
 

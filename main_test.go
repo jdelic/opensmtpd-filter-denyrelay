@@ -45,6 +45,18 @@ func TestLoadRules(t *testing.T) {
 	if !rules.allows("notlisted@example.com", "anyone@example.com") {
 		t.Fatal("expected users not on the denylist to be unaffected")
 	}
+	if rules.allows("norelay+ext@example.com", "anyone@example.com") {
+		t.Fatal("expected norelay+ext@example.com to match norelay@example.com")
+	}
+	if rules.allows("norelay-ext@example.com", "anyone@example.com") {
+		t.Fatal("expected norelay-ext@example.com to match norelay@example.com")
+	}
+	if !rules.allows("relayonlyto+ext@example.com", "other@example.com") {
+		t.Fatal("expected relayonlyto+ext@example.com to inherit relayonlyto@example.com allowlist")
+	}
+	if rules.allows("relayonlyto-ext@example.com", "else@example.com") {
+		t.Fatal("expected relayonlyto-ext@example.com to inherit relayonlyto@example.com denylist")
+	}
 }
 
 func TestLoadRulesDenyAllOverridesRecipientEntries(t *testing.T) {
@@ -87,5 +99,53 @@ func TestNormalizeAddress(t *testing.T) {
 
 	if got := normalizeAddress(" <User@Example.com> "); got != "user@example.com" {
 		t.Fatalf("unexpected normalized address %q", got)
+	}
+}
+
+func TestRuleLookupKeys(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		user string
+		want []string
+	}{
+		{
+			name: "exact only",
+			user: "relay@example.com",
+			want: []string{"relay@example.com"},
+		},
+		{
+			name: "plus extension",
+			user: "relay+tag@example.com",
+			want: []string{"relay+tag@example.com", "relay@example.com"},
+		},
+		{
+			name: "dash extension",
+			user: "relay-tag@example.com",
+			want: []string{"relay-tag@example.com", "relay@example.com"},
+		},
+		{
+			name: "plus and dash extension",
+			user: "relay-tag+detail@example.com",
+			want: []string{"relay-tag+detail@example.com", "relay-tag@example.com", "relay@example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ruleLookupKeys(tt.user)
+			if len(got) != len(tt.want) {
+				t.Fatalf("unexpected key count %d, want %d (%v)", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("unexpected lookup keys %v, want %v", got, tt.want)
+				}
+			}
+		})
 	}
 }
