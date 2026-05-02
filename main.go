@@ -65,11 +65,13 @@ func (f *DenyRelayFilter) GetName() string {
 func (f *DenyRelayFilter) RcptTo(_ opensmtpd.FilterWrapper, event opensmtpd.FilterEvent) {
 	session := f.GetSession(event.GetSessionId())
 	if session == nil || normalizeAddress(session.UserName) == "" {
+		debug("No authentication. Proceed.")
 		event.Responder().Proceed()
 		return
 	}
 
 	if !f.rules.hasRule(session.UserName) {
+		debug("no rule for %s, so we proceed", session.UserName)
 		event.Responder().Proceed()
 		return
 	}
@@ -79,6 +81,7 @@ func (f *DenyRelayFilter) RcptTo(_ opensmtpd.FilterWrapper, event opensmtpd.Filt
 	token := event.GetToken()
 	params := append([]string(nil), event.GetParams()...)
 	responder := event.Responder()
+	debug("sessionID: %s, token: %s, params: %v", sessionID, token, params)
 
 	go func() {
 		recipient, err := recipientFromParams(token, params)
@@ -89,6 +92,7 @@ func (f *DenyRelayFilter) RcptTo(_ opensmtpd.FilterWrapper, event opensmtpd.Filt
 		}
 
 		if f.rules.allows(userName, recipient) {
+			debug("allowing %s to %s", userName, recipient)
 			responder.Proceed()
 			return
 		}

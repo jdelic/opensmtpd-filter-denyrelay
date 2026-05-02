@@ -1,2 +1,4 @@
 github.com/jdelic/opensmtpd-filters-go v0.1.0 h1:lEMUX9eSo3mhg0z7JPit1sv9VPHpU5cL6QqHXqSYey8=
 github.com/jdelic/opensmtpd-filters-go v0.1.0/go.mod h1:yQPUzhNoJv9PXPBsWNlgvKiTDU4AKzOe/mP5hyWcTVc=
+github.com/jdelic/opensmtpd-filters-go v0.1.1 h1:4ZJIJVwAEoNP8feWyHTVREUcNJH9K3MAPdLwP/zMY8E=
+github.com/jdelic/opensmtpd-filters-go v0.1.1/go.mod h1:yQPUzhNoJv9PXPBsWNlgvKiTDU4AKzOe/mP5hyWcTVc=
