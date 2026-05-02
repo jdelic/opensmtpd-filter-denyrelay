@@ -259,6 +259,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("unable to load denylist: %v", err)
 	}
+	debug("Loaded %d rules", len(rules))
 
 	denyRelay := opensmtpd.NewFilter(&DenyRelayFilter{rules: rules})
 	opensmtpd.Run(denyRelay)
