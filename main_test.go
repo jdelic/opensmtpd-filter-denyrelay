@@ -1,6 +1,9 @@
 package main
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,5 +150,183 @@ func TestRuleLookupKeys(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExtractAgentEmailAuthToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		message     []string
+		wantMessage []string
+		wantToken   string
+		wantFound   bool
+	}{
+		{
+			name: "removes token line and following empty line",
+			message: []string{
+				"From: sender@example.com",
+				"To: recipient@example.com",
+				"",
+				"X-Agent-Email-Auth: deadbeef",
+				"",
+				"Hello world",
+			},
+			wantMessage: []string{
+				"From: sender@example.com",
+				"To: recipient@example.com",
+				"",
+				"Hello world",
+			},
+			wantToken: "deadbeef",
+			wantFound: true,
+		},
+		{
+			name: "removes token line without extra empty line",
+			message: []string{
+				"Subject: test",
+				"",
+				"X-Agent-Email-Auth: cafebabe",
+				"Body line",
+			},
+			wantMessage: []string{
+				"Subject: test",
+				"",
+				"Body line",
+			},
+			wantToken: "cafebabe",
+			wantFound: true,
+		},
+		{
+			name: "ignores non-token first body line",
+			message: []string{
+				"Subject: test",
+				"",
+				"Hello world",
+			},
+			wantMessage: []string{
+				"Subject: test",
+				"",
+				"Hello world",
+			},
+		},
+		{
+			name: "returns empty token when line is present but blank",
+			message: []string{
+				"Subject: test",
+				"",
+				"X-Agent-Email-Auth:   ",
+				"Hello world",
+			},
+			wantMessage: []string{
+				"Subject: test",
+				"",
+				"Hello world",
+			},
+			wantFound: true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotMessage, gotToken, gotFound := extractAgentEmailAuthToken(tt.message)
+			if gotFound != tt.wantFound {
+				t.Fatalf("unexpected found value %v, want %v", gotFound, tt.wantFound)
+			}
+			if gotToken != tt.wantToken {
+				t.Fatalf("unexpected token %q, want %q", gotToken, tt.wantToken)
+			}
+			if len(gotMessage) != len(tt.wantMessage) {
+				t.Fatalf("unexpected message length %d, want %d (%v)", len(gotMessage), len(tt.wantMessage), gotMessage)
+			}
+			for i := range tt.wantMessage {
+				if gotMessage[i] != tt.wantMessage[i] {
+					t.Fatalf("unexpected message %v, want %v", gotMessage, tt.wantMessage)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateAgentEmailAuthToken(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/email-agent-auth-tokens/validate/" {
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		if r.Method != http.MethodPost {
+			t.Fatalf("unexpected method %q", r.Method)
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
+		}
+
+		requestBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+
+		switch string(requestBody) {
+		case `{"token":"valid-token"}`:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"valid":true,"token_hint":"valid-token","creator":{"identifier":"agent-user","uuid":"1234","primary_email":"agent@example.com"}}`))
+		case `{"token":"invalid-token"}`:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"valid":false}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer server.Close()
+
+	filter := &DenyRelayFilter{
+		agentEmailAuthValidationURL: server.URL + "/email-agent-auth-tokens/validate/",
+		agentEmailAuthHTTPClient:    server.Client(),
+	}
+
+	valid, response, err := filter.validateAgentEmailAuthToken("valid-token")
+	if err != nil {
+		t.Fatalf("validateAgentEmailAuthToken(valid-token): %v", err)
+	}
+	if !valid {
+		t.Fatal("expected valid-token to validate")
+	}
+	if response.Creator.Identifier != "agent-user" {
+		t.Fatalf("unexpected creator identifier %q", response.Creator.Identifier)
+	}
+
+	valid, _, err = filter.validateAgentEmailAuthToken("invalid-token")
+	if err != nil {
+		t.Fatalf("validateAgentEmailAuthToken(invalid-token): %v", err)
+	}
+	if valid {
+		t.Fatal("expected invalid-token to fail validation")
+	}
+
+	if _, _, err = filter.validateAgentEmailAuthToken("temporary-failure"); err == nil {
+		t.Fatal("expected temporary-failure to return an error")
+	}
+}
+
+func TestNormalizeAgentEmailAuthValidationURL(t *testing.T) {
+	t.Parallel()
+
+	got, err := normalizeAgentEmailAuthValidationURL(" https://auth.example.com/email-agent-auth-tokens/validate/ ")
+	if err != nil {
+		t.Fatalf("normalizeAgentEmailAuthValidationURL: %v", err)
+	}
+	if got != "https://auth.example.com/email-agent-auth-tokens/validate/" {
+		t.Fatalf("unexpected normalized URL %q", got)
+	}
+
+	if _, err := normalizeAgentEmailAuthValidationURL("http://auth.example.com/email-agent-auth-tokens/validate/"); err == nil {
+		t.Fatal("expected http URL to be rejected")
 	}
 }
